@@ -1,0 +1,413 @@
+import os
+import sys
+import socket
+import subprocess
+from pathlib import Path
+import ipaddress
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Load .env file if it exists
+def load_env_file():
+    """Load environment variables from .env files (repo root, then backend/.env)."""
+    candidates = [
+        PROJECT_ROOT / '.env',
+        PROJECT_ROOT / 'backend' / '.env',
+    ]
+    for env_file in candidates:
+        if env_file.exists():
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+# Load .env file
+load_env_file()
+
+# OpenAI API Key Configuration
+# Option 1: Set your API key directly here (replace with your actual key)
+# OPENAI_API_KEY = "sk-your-api-key-here"  # Replace with your actual API key
+
+# Option 2: Set as environment variable (now includes .env file)
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
+if not OPENAI_API_KEY:
+    print("⚠️  WARNING: OPENAI_API_KEY not set. AI features will not work.")
+    print("   To fix this:")
+    print("   1. Get your key from: https://platform.openai.com/api-keys")
+    print("   2. Either:")
+    print("      - Set environment variable: set OPENAI_API_KEY=your-key-here")
+    print("      - Or uncomment and set the key directly in dev.py line 13")
+    print("")
+
+
+def find_venv_python() -> Path | None:
+    """
+    Locate the virtual environment's Python executable.
+    Search order:
+    1) DEV_VENV env var (absolute or relative to project root)
+    2) Common names in project root: venv, .venv, env
+    3) Scan immediate subdirectories for a Scripts/python.exe
+    """
+    # 1) Explicit override via env var
+    env_venv = os.environ.get("DEV_VENV")
+    if env_venv:
+        env_path = Path(env_venv)
+        if not env_path.is_absolute():
+            env_path = PROJECT_ROOT / env_path
+        python_path = env_path / "Scripts" / "python.exe"
+        if python_path.exists():
+            return python_path
+
+    # 2) Common names at root
+    candidate_dirs = [
+        PROJECT_ROOT / "venv",
+        PROJECT_ROOT / ".venv",
+        PROJECT_ROOT / "env",
+    ]
+
+    for candidate in candidate_dirs:
+        python_path = candidate / "Scripts" / "python.exe"
+        if python_path.exists():
+            return python_path
+
+    # Fallback: scan one level deep for a venv-like structure
+    for child in PROJECT_ROOT.iterdir():
+        if child.is_dir():
+            python_path = child / "Scripts" / "python.exe"
+            if python_path.exists():
+                return python_path
+
+    return None
+
+
+def create_venv(target_dir: Path) -> Path | None:
+    """Create a virtual environment at target_dir using the current Python.
+    Returns the path to the created venv's python.exe or None on failure.
+    """
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Creating virtual environment at: {target_dir}")
+        code = subprocess.call([sys.executable, "-m", "venv", str(target_dir)])
+        if code != 0:
+            print("Failed to create virtual environment", file=sys.stderr)
+            return None
+        python_path = target_dir / "Scripts" / "python.exe"
+        if python_path.exists():
+            # Best-effort: upgrade pip in the fresh venv
+            try:
+                subprocess.call([str(python_path), "-m", "pip", "install", "--upgrade", "pip"])
+            except Exception:
+                pass
+            return python_path
+    except Exception as exc:
+        print(f"Error creating venv: {exc}", file=sys.stderr)
+    return None
+
+
+def find_manage_py() -> Path | None:
+    """
+    Locate manage.py in the project.
+    - Prefer at project root
+    - Otherwise search up to a few levels deep, skipping common venv dirs
+    """
+    root_candidate = PROJECT_ROOT / "manage.py"
+    if root_candidate.exists():
+        return root_candidate
+
+    skip_dirs = {"venv", ".venv", "env", "node_modules", ".git", ".idea", ".vscode"}
+    max_depth = 3
+
+    root_parts = len(PROJECT_ROOT.parts)
+    for dirpath, dirnames, filenames in os.walk(PROJECT_ROOT):
+        # Prune directories we don't want to descend into
+        dirnames[:] = [d for d in dirnames if d.lower() not in skip_dirs]
+
+        # Limit search depth
+        depth = len(Path(dirpath).parts) - root_parts
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+
+        if "manage.py" in filenames:
+            return Path(dirpath) / "manage.py"
+
+    return None
+
+
+def run(cmd: list[str], cwd: Path | None = None) -> int:
+    process = subprocess.run(cmd, cwd=cwd or PROJECT_ROOT)
+    return process.returncode
+
+
+def pip_install(python_exe: Path, args: list[str]) -> int:
+    cmd = [str(python_exe), "-m", "pip", *args]
+    return run(cmd)
+
+
+def print_python_context(python_exe: Path) -> None:
+    try:
+        out = subprocess.check_output([
+            str(python_exe),
+            "-c",
+            (
+                "import sys,site,sysconfig;"
+                "print('Python:', sys.executable);"
+                "print('Prefix:', sys.prefix);"
+                "print('Base Prefix:', sys.base_prefix);"
+                "print('Site-packages:', sysconfig.get_paths().get('purelib'))"
+            ),
+        ])
+        print(out.decode().strip())
+    except Exception:
+        pass
+
+
+def ensure_dependencies(python_exe: Path, requirements_file: Path | None) -> None:
+    """
+    Install dependencies.
+    - If requirements.txt exists, install from it.
+    - Otherwise, ensure at least Django is installed.
+    """
+    requirements = requirements_file if requirements_file and requirements_file.exists() else PROJECT_ROOT / "requirements.txt"
+
+    # Ensure pip itself is available and reasonably up to date (best-effort)
+    try:
+        pip_install(python_exe, ["--version"])  # probe
+        pip_install(python_exe, ["install", "--upgrade", "pip"])  # best-effort
+    except Exception:
+        pass
+
+    if requirements.exists():
+        print(f"Installing dependencies from {requirements} ...")
+        code = pip_install(python_exe, [
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            "-r",
+            str(requirements),
+        ])
+        if code != 0:
+            print("Failed to install from requirements.txt", file=sys.stderr)
+            sys.exit(code)
+    else:
+        # Minimal guarantee: Django present
+        try:
+            subprocess.check_call([str(python_exe), "-c", "import django; print(django.__version__)"])
+            print("Django already installed.")
+        except subprocess.CalledProcessError:
+            print("Django not found. Installing django ...")
+            code = pip_install(python_exe, [
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "django",
+            ])
+            if code != 0:
+                print("Failed to install Django", file=sys.stderr)
+                sys.exit(code)
+
+
+def find_free_port(start_port: int = 8000, max_port: int = 8999) -> int:
+    """Find a free TCP port by binding to 0.0.0.0 to catch conflicts across all interfaces."""
+    for port in range(start_port, max_port + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("0.0.0.0", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("No free port found in range 8000-8999")
+
+
+def get_local_ip() -> str:
+    """Best-effort to get a LAN IP for CSRF/hosts. Falls back to 127.0.0.1."""
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        # ensure it's a valid IPv4
+        ipaddress.ip_address(ip)
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def start_server_bg(python_exe: Path, manage_py: Path, port: int) -> subprocess.Popen:
+    """Start Django dev server in the background and return the Popen handle."""
+    if not manage_py.exists():
+        raise FileNotFoundError("manage.py not found")
+
+    address = f"0.0.0.0:{port}"
+    print(f"Starting Django development server on {address} ...")
+    cmd = [str(python_exe), str(manage_py), "runserver", address]
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if OPENAI_API_KEY:
+        env["OPENAI_API_KEY"] = OPENAI_API_KEY
+    proc = subprocess.Popen(cmd, cwd=manage_py.parent, env=env)
+    return proc
+
+
+def wait_for_health(port: int, timeout_seconds: int = 60) -> bool:
+    """Poll /api/health/ until ok or timeout."""
+    import time
+    import urllib.request
+    import urllib.error
+
+    url = f"http://127.0.0.1:{port}/api/health/"
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                if resp.status == 200:
+                    return True
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+            pass
+        time.sleep(1)
+    return False
+
+
+def start_electron(port: int) -> subprocess.Popen | None:
+    """Build Electron (TypeScript) and start the app pointing to the running Django server."""
+    electron_dir = PROJECT_ROOT / "electron"
+    if not electron_dir.exists():
+        print("Electron directory not found; skipping Electron startup.")
+        return None
+
+    env = os.environ.copy()
+    env["ELECTRON_DJANGO_PORT"] = str(port)
+    # Tell Electron not to spawn Django itself if it supports the flag
+    env.setdefault("ELECTRON_SPAWN_DJANGO", "0")
+
+    # Ensure dependencies (best-effort, no prompt)
+    print("Ensuring Electron dependencies (npm install) ...")
+    npm_exe = "npm.cmd" if os.name == "nt" else "npm"
+    npx_exe = "npx.cmd" if os.name == "nt" else "npx"
+    try:
+        subprocess.check_call([npm_exe, "install", "--no-fund", "--no-audit"], cwd=electron_dir)
+    except FileNotFoundError:
+        print("Node.js npm not found on PATH. Install Node 20+ and ensure npm is available.", file=sys.stderr)
+        return None
+    except subprocess.CalledProcessError:
+        print("Warning: npm install failed; continuing and attempting to build.")
+
+    # Build TS → dist (so Electron can run from compiled JS)
+    print("Building Electron app (TypeScript → dist) ...")
+    build_code = subprocess.call([npm_exe, "run", "build", "--silent"], cwd=electron_dir, env=env)
+    if build_code != 0:
+        print("Electron build failed", file=sys.stderr)
+        return None
+
+    # Start Electron using compiled main (package.json main points at dist/main.js)
+    print("Starting Electron ...")
+    try:
+        return subprocess.Popen([npx_exe, "electron", "."], cwd=electron_dir, env=env)
+    except Exception as exc:
+        print(f"Failed to start Electron: {exc}", file=sys.stderr)
+        return None
+
+
+def main() -> None:
+    print("Locating virtual environment ...")
+    python_exe = find_venv_python()
+    if not python_exe:
+        # Decide where to create it: DEV_VENV or ./venv
+        preferred = os.environ.get("DEV_VENV") or "venv"
+        preferred_path = Path(preferred)
+        if not preferred_path.is_absolute():
+            preferred_path = PROJECT_ROOT / preferred_path
+        python_exe = create_venv(preferred_path)
+        if not python_exe:
+            sys.exit(1)
+
+    print(f"Using virtual env Python: {python_exe}")
+    print("Interpreter context:")
+    print_python_context(python_exe)
+
+    manage_py = find_manage_py()
+    if not manage_py:
+        print("manage.py not found anywhere in the project", file=sys.stderr)
+        sys.exit(1)
+
+    # Prefer a requirements.txt adjacent to manage.py, then project root
+    manage_requirements = manage_py.parent / "requirements.txt"
+
+    print("Ensuring dependencies are installed ...")
+    ensure_dependencies(python_exe, manage_requirements if manage_requirements.exists() else None)
+
+    # Fixed dev port (overridable via DEV_PORT)
+    env_port = os.environ.get("DEV_PORT")
+    try:
+        port = int(env_port) if env_port and env_port.isdigit() else 8111
+    except Exception:
+        port = 8111
+
+    # Ensure DB is migrated so sessions/auth tables exist
+    migrate_code = run([str(python_exe), str(manage_py), "migrate"], cwd=manage_py.parent)
+    if migrate_code != 0:
+        print("Migrations failed; cannot start server", file=sys.stderr)
+        sys.exit(migrate_code)
+
+    # Dynamically set dev-friendly env for hosts/CSRF so login sessions work reliably
+    local_ip = get_local_ip()
+    env = os.environ.copy()
+    # Settings expect these names
+    env.setdefault("DEBUG", "1")
+    env.setdefault("ALLOWED_HOSTS", f"localhost,127.0.0.1,{local_ip}")
+    env.setdefault("CSRF_TRUSTED_ORIGINS", f"http://localhost:{port},http://127.0.0.1:{port},http://{local_ip}:{port}")
+    # Dev cookies over http (read in settings if applicable)
+    env.setdefault("DJANGO_SESSION_COOKIE_SECURE", "0")
+    env.setdefault("DJANGO_CSRF_COOKIE_SECURE", "0")
+
+    # Re-run server with these env vars
+    os.environ.update(env)
+
+    # Start Django in background
+    django_proc = start_server_bg(python_exe, manage_py, port)
+
+    # Wait for health endpoint
+    print("Waiting for Django /api/health ...")
+    if not wait_for_health(port, timeout_seconds=90):
+        print("Django did not become ready in time.", file=sys.stderr)
+        try:
+            django_proc.terminate()
+        except Exception:
+            pass
+        sys.exit(1)
+
+    # Start Electron (desktop app)
+    electron_proc = start_electron(port)
+
+    # Attach to Electron process; if Electron is not available, fall back to server only
+    try:
+        if electron_proc is not None:
+            electron_code = electron_proc.wait()
+        else:
+            # Keep Django running in foreground if Electron didn't start
+            electron_code = django_proc.wait()
+    except KeyboardInterrupt:
+        electron_code = 0
+    finally:
+        # Cleanup: stop Electron and Django
+        try:
+            if electron_proc and electron_proc.poll() is None:
+                electron_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if django_proc and django_proc.poll() is None:
+                django_proc.terminate()
+        except Exception:
+            pass
+
+    sys.exit(electron_code)
+
+
+if __name__ == "__main__":
+    main()
+
+

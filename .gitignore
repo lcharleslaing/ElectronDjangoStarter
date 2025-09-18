@@ -1,0 +1,29 @@
+# Node
+node_modules/
+backend/static/js/node_modules/
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/db.sqlite3
+backend/.env
+
+# Django static files (compiled)
+backend/staticfiles/
+
+# Build artifacts
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Electron
+electron/dist/
+release/
+
+# OS
+*.swp

@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="breadcrumbs text-sm mb-4">
+  <ul>
+    <li><a href="/projects/">Projects</a></li>
+    <li>{{ project.title }}</li>
+  </ul>
+</div>
+
+<div class="card bg-base-100 shadow-xl">
+  <div class="card-body gap-4">
+    <form method="post" class="grid grid-cols-1 gap-4">
+      {% csrf_token %}
+      <label class="form-control w-full">
+        <div class="label"><span class="label-text">Title</span></div>
+        <input type="text" name="title" class="input input-bordered w-full" value="{{ project.title }}" required />
+      </label>
+      <label class="form-control w-full">
+        <div class="label"><span class="label-text">Description</span></div>
+        <textarea name="description" class="textarea textarea-bordered w-full" rows="8">{{ project.description }}</textarea>
+      </label>
+      <div class="flex gap-3 pt-2">
+        <button class="btn btn-primary">Save</button>
+        <button name="delete" value="1" class="btn btn-error" onclick="return confirm('Delete this project?');">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

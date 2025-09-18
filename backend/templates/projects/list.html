@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h2 class="text-2xl font-bold">Projects</h2>
+  <a href="{% url 'accounts:logout' %}" onclick="event.preventDefault(); this.closest('div').querySelector('form')?.submit();" class="btn btn-ghost hidden">Logout</a>
+</div>
+
+<form id="new-project-form" method="post" class="card bg-base-100 shadow-xl mb-8">
+  <div class="card-body grid grid-cols-1 md:grid-cols-3 gap-4">
+    {% csrf_token %}
+    <input type="text" name="title" placeholder="Project title" class="input input-bordered w-full" required>
+    <input type="text" name="description" placeholder="Short description" class="input input-bordered w-full">
+    <button class="btn btn-primary">Create</button>
+  </div>
+</form>
+
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  {% for p in projects %}
+  <a href="{% url 'projects:detail' p.id %}" class="card bg-base-100 shadow hover:shadow-xl transition">
+    <div class="card-body">
+      <h3 class="card-title">{{ p.title }}</h3>
+      <p class="text-sm opacity-80">{{ p.description|default:'No description' }}</p>
+      <div class="card-actions justify-end">
+        <span class="badge">Updated {{ p.updated_at|date:'Y-m-d H:i' }}</span>
+      </div>
+    </div>
+  </a>
+  {% empty %}
+  <div class="col-span-full">
+    <div class="alert">
+      <span>No projects yet. Create your first above.</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="max-w-md mx-auto">
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title">Register</h2>
+      <form method="post" class="form-control gap-3">
+        {% csrf_token %}
+        <label class="input input-bordered flex items-center gap-2">
+          <span>Username</span>
+          {{ form.username }}
+        </label>
+        <label class="input input-bordered flex items-center gap-2">
+          <span>Email</span>
+          {{ form.email }}
+        </label>
+        <label class="input input-bordered flex items-center gap-2">
+          <span>Password</span>
+          {{ form.password1 }}
+        </label>
+        <label class="input input-bordered flex items-center gap-2">
+          <span>Confirm</span>
+          {{ form.password2 }}
+        </label>
+        <button class="btn btn-primary">Create Account</button>
+      </form>
+      <div class="pt-2 text-sm">
+        <a class="link" href="{% url 'accounts:login' %}">Back to login</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

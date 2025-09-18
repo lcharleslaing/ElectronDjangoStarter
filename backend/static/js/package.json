@@ -1,0 +1,14 @@
+{
+    "name": "django-static",
+    "version": "1.0.0",
+    "private": true,
+    "devDependencies": {
+        "tailwindcss": "^3.4.14",
+        "daisyui": "^4.12.10",
+        "autoprefixer": "^10.4.20",
+        "postcss": "^8.4.47"
+    },
+    "scripts": {
+        "build": "tailwindcss -i ./css/tailwind.css -o ./css/compiled.css --watch"
+    }
+}
